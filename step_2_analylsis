@@ -1,0 +1,142 @@
+##clear all and load the packages
+rm(list = ls())  
+library(limma)
+library(stringr)
+library(dplyr)
+##set GSE name
+GSE_name = 'GSE33119'
+##set project folder and load the life to be analysised
+path = str_c('D:\\myresearch\\sepsis\\GEOdata\\',GSE_name)
+setwd(path)
+load('for_analysis.RData')
+##make contrast matrix
+design <- model.matrix(~0+factor(group_list))    #grouplist is charactor
+colnames(design)=levels(factor(group_list))
+rownames(design)=colnames(exprSet)
+contrast_matrix<-makeContrasts(paste0(unique(as.matrix(group_list)),collapse = "-"),levels = design)   ##这个矩阵声明，我们要把progres.组跟stable进行差异分析比较
+
+##DEG analysis
+##step1
+fit <- lmFit(exprSet,design)
+##step2
+fit2 <- contrasts.fit(fit, contrast_matrix)   ##这一步很重要，大家可以自行看看效果
+fit2 <- eBayes(fit2)  ## default no trend !!!
+##eBayes() with trend=TRUE
+##step3
+tempOutput = topTable(fit2, coef=1, n=Inf,adjust = 'fdr')
+#topTable(fit,adjust='fdr',number=Inf,p.value=0.05)
+DEG = na.omit(tempOutput) 
+#write.csv(DEG,str_c(GSE_name,"_DEG.csv"),quote = F)
+#head(DEG)
+
+
+DEG$change <- as.factor(ifelse(DEG$P.Val < 0.05 & abs(DEG$logFC) > 1,
+                                ifelse(DEG$logFC > 1,'UP','DOWN'),'NOT')) 
+DEG$sign <- ifelse(DEG$P.Val < 0.05 & abs(DEG$logFC) > 1,rownames(DEG),NA) 
+DEG_sign <- filter(DEG,change != 'NOT')
+write.csv(DEG_sign,str_c(GSE_name,"_DEG_sign.csv"))
+write.csv(DEG_sign[DEG_sign$change == 'UP',],str_c(GSE_name,"_DEG_up"))
+write.csv(DEG_sign[DEG_sign$change == 'DOWN',],str_c(GSE_name,"_DEG_down"))
+
+##voncano plot
+library(ggplot2)
+{  
+  von = ggplot(data = DEG, aes(x = logFC, y = -log10(adj.P.Val), color = change)) +
+    geom_point(alpha=0.8, size = 1) +
+    theme_bw(base_size = 15) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_blank()
+    ) + 
+    geom_hline(yintercept=2 ,linetype=4) + 
+    geom_vline(xintercept=c(-2,2) ,linetype=4 ) +
+    scale_color_manual(name = "", values = c("red", "green", "black"), limits = c("UP", "DOWN", "NOT"))
+  ggsave(von,filename = str_c(GSE_name,"_volcano.jpeg"))
+}
+
+##heatmap plot
+library(pheatmap)
+## 设定差异基因阈值，减少差异基因用于提取表达矩阵
+allDiff_pair=topTable(fit2,adjust='BH',coef= 1,number=Inf,p.value=0.05,lfc =0.5) 
+##提前部分数据用作热图绘制
+heatdata <- exprSet[rownames(allDiff_pair),]
+top100 <- heatdata[1:100,]
+##制作一个分组信息用于注释
+annotation_col <- data.frame(group_list)
+rownames(annotation_col) <- colnames(top100)
+
+tiff(filename = str_c(GSE_name,"_heatmap.tif"),width = 8, height = 6, units = "in", pointsize = 12,
+     compression = "lzw",
+     bg = "white", res = 300, family = "", restoreConsole = TRUE,
+     type = "windows")
+##如果注释出界，可以通过调整格子比例和字体修正
+pheatmap(top100, #热图的数据
+         cluster_rows = TRUE,#行聚类
+         cluster_cols = TRUE,#列聚类，可以看出样本之间的区分度
+         annotation_col =annotation_col, #标注样本分类
+         annotation_legend=TRUE, # 显示注释
+         show_rownames = F,# 显示行名
+         show_colnames = F,# 显示列名
+         scale = "row", #以行来标准化，这个功能很不错
+         color =colorRampPalette(c("blue", "white","red"))(100))
+dev.off()
+## goenrich analysis
+suppressMessages(library(clusterProfiler))
+gene <- str_trim(DEG_sign$sign)
+write.csv(gene,str_c(GSE_name,"_go_genelist.csv"))
+#基因名称转换，返回的是数据框,基因名前后不能有空格
+gene = bitr(gene, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db",drop = T)
+
+
+gene_list <- str_trim(gene$ENTREZID)     #input enrichgo is "ENTREZID"
+
+## GO分析
+go1 <- enrichGO(gene = gene_list, 
+               OrgDb = "org.Hs.eg.db", 
+               ont="all")
+
+go2 <- enrichGO(gene = gene_list,
+               keyType = 'ENTREZID',
+               OrgDb = "org.Hs.eg.db",
+               ont = 'all',
+               pAdjustMethod = 'BH',
+               pvalueCutoff = 0.01,
+               qvalueCutoff = 0.05,
+               readable = T)
+go11 <- data.frame(go1)
+go21 <- data.frame(go2)
+write.csv(go1@result,file = str_c(GSE_name,"_go_result1.csv"))
+write.csv(go2@result,file = str_c(GSE_name,"_go_result2.csv"))
+tiff(filename = str_c(GSE_name,"_go_barplot.tif"),width = 8, height = 6, units = "in", pointsize = 12,
+     compression = "lzw",
+     bg = "white", res = 300, family = "", restoreConsole = TRUE,
+     type = "windows")
+barplot(go2,showCategory = 20)
+dev.off()
+tiff(filename = str_c(GSE_name,"_go_dotplot.tif"),width = 8, height = 6, units = "in", pointsize = 12,
+     compression = "lzw",
+     bg = "white", res = 300, family = "", restoreConsole = TRUE,
+     type = "windows")
+dotplot(go2,showCategory = 20)
+dev.off()
+
+##kegg  pvalue need to be modified depends on situation
+kegg <- enrichKEGG(gene_list, 
+                   organism = 'hsa', 
+                   keyType = 'kegg', 
+                   pvalueCutoff = 0.1,
+                   pAdjustMethod = 'BH', 
+                   minGSSize = 10,
+                   maxGSSize = 500,
+                   qvalueCutoff = 0.2,
+                   use_internal_data = FALSE)
+kegg_result <- data.frame(kegg)
+## write table and plot
+write.csv(kegg_result,str_c(GSE_name,"_kegg_result.csv"))
+tiff(filename = str_c(GSE_name,"_kegg_dotplot.tif"),width = 8, height = 6, units = "in", pointsize = 12,
+     compression = "lzw",
+     bg = "white", res = 300, family = "", restoreConsole = TRUE,
+     type = "windows")
+dotplot(kegg, showCategory=5)
+dev.off()
+
