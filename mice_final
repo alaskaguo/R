@@ -1,0 +1,20 @@
+rm(list = ls())
+library(dplyr)
+library(ggplot2)
+library(readr)
+path = "D:\\guofeng\\myresearch\\mice"
+setwd(path)
+data = read_csv("mice_final.csv")
+str(data)
+data$镇静药物 = factor(data$镇静药物,levels = c("0","1"),labels = c("是","否"))
+data$头部 = factor(data$头部,levels = c("0","1"),labels = c("正常","异常"))                   
+data$头部影像学 = factor(data$头部影像学,levels = c("0","1"),labels =c("正常","异常"))                  
+
+ggplot(data,aes(x = data$镇静药物,fill = data$鼠药中毒))+
+  geom_bar()
+ggplot(data,aes(x = data$头部影像学,fill = data$鼠药中毒))+
+  geom_bar()
+ggplot(data,aes(x = data$头部,fill = data$鼠药中毒))+
+  geom_bar()
+ggplot(data,aes(x = data$差值,fill = data$鼠药中毒))+
+  geom_histogram(bins = 20)
