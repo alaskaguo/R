@@ -1,0 +1,89 @@
+rm(list = ls())
+library(tableone)
+library(rms)
+library(stringr)
+setwd("D:/myresearch/model")
+load("model.RData")
+
+## 第三步 按照nomogram要求“打包”数据，绘制nomogram的关键步骤,??datadist查看详细说明
+dd=datadist(dataset)
+options(datadist="dd") 
+## set var label
+label(dataset$gastric_tube) = "Use of gastric tube"
+label(dataset$venilator) = "Mechanic ventilation"
+label(dataset$Pulmonary_diseases) = "Complication of Pulmonary disease"
+label(dataset$loh_bsi_1) = "Hospilizied before infection"
+units(dataset$loh_bsi_1) = "Days"
+##提取纳入的变量名
+var = rownames(summary(multi_model)$coef)[-1]
+var = str_replace(var,"Yes","")
+norm_vars = paste(var,collapse = "+")
+norm_formula = paste(label,"~",norm_vars)
+## 第四步 构建模型
+## 构建logisitc回归模型
+f1 <- lrm(as.formula(norm_formula), data = dataset,x = T,y = T) 
+
+## 绘制logisitc回归的风险预测值的nomogram图
+nom <- nomogram(f1, fun= function(x)1/(1+exp(-x)), # or fun=plogis
+                lp=F, funlabel="Risk")
+## 保存tif图
+tiff("normgram.tif",width = 1000,height = 600)
+plot(nom,xfrac = 0.4,col.grid = gray(c(0.8, 0.95)),points.label = "Score",cex.axis = 1.5,cex.var = 1.8,)
+dev.off()
+
+setEPS()
+postscript("normgram.eps",width = 10,height = 6)
+plot(nom,xfrac = 0.4,col.grid = gray(c(0.8, 0.95)),points.label = "Score",cex.axis = 1.5,cex.var = 1.8)
+dev.off()
+
+cal_1<- calibrate(f1, method='boot', B=1000) # 构建校准曲线对象
+
+setEPS()
+postscript("normgram.eps",width = 10,height = 6)
+plot(cal_1,xlim=c(0,1.0),ylim=c(0,1.0)) # 打印校准曲线 结果略。
+dev.off()
+
+## 绘制Decision Curve
+library(rmda)
+trainset$Oxacillin = ifelse(trainset$Oxacillin == "Positive",1,0)
+testset$Oxacillin = ifelse(testset$Oxacillin == "Positive",1,0)
+DcvTrain<- decision_curve(as.formula(norm_formula)
+                        ,data = trainset,
+                         family = binomial(link ='logit'), thresholds = seq(0,1, by = 0.01),
+                         confidence.intervals= 0.95,study.design = 'case-control',
+                         population.prevalence= 0.3
+                         )
+DcvTest<- decision_curve(as.formula(norm_formula)
+                         ,data = testset,
+                          family = binomial(link ='logit'), thresholds = seq(0,1, by = 0.01),
+                          confidence.intervals= 0.95,study.design = 'case-control',
+                          population.prevalence= 0.3
+                         )
+
+jpeg("DCV_train.jpg",width = 1000,height = 500)
+plot_decision_curve(DcvTrain,         ## 可以是曲线对象的List
+                    curve.names="Normogram",
+                    cost.benefit.axis =FALSE,
+                    col = c('red','blue'),
+                    confidence.intTervals =T,
+                    standardize = F)  
+dev.off()
+
+setEPS()
+postscript("normgram.eps",width = 10,height = 6)
+plot_decision_curve(DcvTrain,         ## 可以是曲线对象的List
+                    curve.names="Normogram",
+                    cost.benefit.axis =FALSE,
+                    col = c('red','blue'),
+                    confidence.intTervals =T,
+                    standardize = F)  
+dev.off()
+
+jpeg("DCV_test.jpg",width = 1000,height = 500)
+plot_decision_curve(DcvTest,         ## 可以是曲线对象的List
+                    curve.names="Normogram",
+                    cost.benefit.axis =FALSE,
+                    col = c('red','blue'),
+                    confidence.intTervals =T,
+                    standardize = F)  
+dev.off()  
