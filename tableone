@@ -1,0 +1,96 @@
+rm(list = ls())
+library(readxl)
+library(tableone)
+library(labelled)
+library(dplyr)
+setwd("D:/myresearch/model")
+
+dataset = read_excel("data_cleaned_label.xlsx")
+colnames(dataset)
+
+excludeCol = -c(1,6,8:16,28,30,37:39,44,58)       ##删除id列
+#使用select过滤不要的列
+#dataset[,-which(names(dataset)%in%c("a","b")]       ##按列名删除
+#dataset = subset(dataset,select = excludeCol)       ## 这种方式取子集会失去标签
+dataset = dataset[,excludeCol]     ## 这种方式取子集可保留标签
+#str(dataset)
+{
+## 划分训练集和测试集，比例0.7
+n=nrow(dataset)
+set.seed(123)
+trainindex <- sample(1:n,0.7*n)
+trainset <- dataset[trainindex,]         ##标签消失
+testset <- dataset[-trainindex,]
+table(trainset$Oxacillin)
+table(testset$Oxacillin)
+## 合并两个数据集
+trainset$group = "Training"
+testset$group = "Validation"
+dataset = rbind(trainset,testset)
+}
+
+
+## 生成列标签list
+vartolabel = read_excel("data_cleaned_label.xlsx",sheet = "Sheet1")
+varlist = as.list(vartolabel$label)
+names(varlist) = vartolabel$var
+##选取标签子集使用，要不加不上
+a = varlist[colnames(dataset)]
+b = a[!is.na(a)]
+var_label(dataset) = b[-length(b)]         ##删掉最后一个，是个空值，不知道为啥
+
+colnames(dataset)
+
+#varsToFactor = colnames(dataset)[c(1:38,62)]
+varsToFactor = colnames(select_if(dataset,is.character))     ##提取字符串变量列名
+
+##统计分类变量阳性分布
+positive_count = as.data.frame(apply(dataset[,varsToFactor],2,
+                                     function(x){table(x)[[2]]}))
+colnames(positive_count) = "count"
+positive_count$count = as.numeric(positive_count$count)
+## 生成拟删除列名向量
+coldelete = rownames(subset(positive_count,count<15))
+##  对连续变量进行正太分布检验
+contiouns_vars = select_if(dataset,is.numeric)
+plist = as.data.frame(apply(contiouns_vars, 2, function(x)shapiro.test(x)$p.value))
+## 更改P值表列名
+colnames(plist) = "pvalue"
+## 提取非正太分布数据行名
+nonnormal_vars = rownames(subset(plist,pvalue < 0.05))
+## 删除相应列
+dataset = dataset[,!names(dataset) %in% coldelete]
+
+{
+## 生成自变量名向量
+vars = colnames(dataset)
+## 生成表1对像，按训练集分许
+tableOne <- CreateTableOne(vars = vars, strata = c("group"), data = dataset)
+## 打印表1
+tableone = as.data.frame(print(tableOne,
+                               explain = F,
+                               showAllLevels = F,
+                               nonnormal = nonnormal_vars,
+                               printToggle = F,
+                               dropEqual = T,
+                               varLabels = T))
+
+write.csv(tableone,"table_1_train&validation.csv")
+
+
+
+
+## 生成表1对象，按结局纳入标准分组
+tableone_1 = CreateTableOne(vars = vars, strata = c("Oxacillin"), data = dataset)
+tableone_1 = as.data.frame(print(tableone_1,
+                               explain = F,
+                               showAllLevels = F,
+                               nonnormal = nonnormal_vars,
+                               printToggle = F,
+                               dropEqual = T,
+                               varLabels = T))
+write.csv(tableone_1,"table_1_outcome.csv")
+save.image("tableone.RData")
+}
+
+
