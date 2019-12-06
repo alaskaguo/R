@@ -1,0 +1,116 @@
+rm(list = ls())
+library(tableone)
+library(stringr)
+setwd("D:/myresearch/model")
+load("tableone.RData")
+
+m = intersect(varsToFactor,colnames(dataset))
+dataset[,m] = lapply(dataset[,m], function(x)as.factor(x))
+str(dataset)
+
+label = "Oxacillin"    ##设置因变量
+
+## 单因素回归前需要把因变量变成数值型，为啥
+#dataset[dataset$Oxacillin == "Positive","Oxacillin"] = 1
+#dataset[dataset$Oxacillin == "Negtive","Oxacillin"] = 0
+#dataset$Oxacillin = as.numeric(dataset$Oxacillin)
+vars = vars[!vars%in%label]
+univ_foumulas = sapply(vars, function(x)as.formula(paste(label,"~",x)))
+univ_models = lapply(univ_foumulas,function(x){glm(x,
+                                                   family = binomial(link = "logit"),
+                                                   data = dataset)})
+univ_results = lapply(univ_models,
+                      function(x){
+                        x1 = summary(x)
+                        CI = exp(confint(x)) ##提取置信区间
+                        OR = exp(coef(x))   ##提取OR值
+                        ORCI = paste0(round(OR[[2]],2),"(",round(CI[2,1],2),"~",round(CI[2,2],2),")")  ##生成表格内容
+                        P = abs(round(x1$coefficients[,"Pr(>|z|)"][[2]],3))   ##提取P值
+                        B = round(x1$coefficients[,"Estimate"][[2]],3)
+                        res = c(B,ORCI,P)
+                        names(res) = c("B","OR(95%CI)","P value")
+                        return(res)
+                      })
+res = t(as.data.frame(univ_results,check.names = F))
+table_2 = as.data.frame(res)
+write.csv(table_2,file = "table_2.csv",fileEncoding = "utf-8")
+
+## 筛选P<0.1的变量
+table_2$`P value` =  as.numeric(as.character(table_2$`P value`))
+multi_vars = paste(rownames(table_2[table_2$`P value` < 0.10,]),collapse = "+")
+
+multi_formulas = paste(label,"~",multi_vars)
+multi_model = glm(multi_formulas,
+                  family = binomial(link = "logit"),
+                  data = dataset)
+
+library(MASS)
+multi_model = stepAIC(multi_model
+                      #,direction = "backward"
+                      )   ## 后退法,默认为双向法
+table_3 = as.data.frame(ShowRegTable(multi_model))          
+table_3$B = round(summary(multi_model)$coef,2)          ## 保留两位小数
+rownames(table_3) = sapply(rownames(table_3),function(x)str_replace(x,"Yes",""))    ##去掉行名中的“Yes”
+
+write.csv(table_3,"table_3.csv")
+
+## 预测阳性概率
+trainset$prob = predict(multi_model,trainset,
+                        type = "response",
+                        legacy.axes = T,percent  =T)   ##对训练集预测,type很重要
+testset$prob = predict(multi_model,testset,
+                       type = "response")
+
+## 绘制ROC曲线
+library(pROC)
+#par(pty = "s")
+roc_train = roc(trainset$Oxacillin,trainset$prob,smooth = F,percent = F)
+roc_test = roc(testset$Oxacillin,testset$prob,smooth = F,percent = F)
+
+tiff(filename = "roc_train.tif",compression="lzw",units="in",res=1000,pointsize=8,height=6,width=6)
+plot(roc_train,print.auc = T,print.thres = "best",
+     auc.polygon.col="#33e3cf57",auc.polygon=T,
+     main = "Training Cohort",
+     grid=c(0.1,0.2), grid.col=c("green", "red"),
+     max.auc.polygon=TRUE,
+     best.method = "c",lwd = 4,col = "#377eb8"
+     )
+dev.off()
+
+tiff(filename = "roc_test.tif",compression="lzw",units="in",res=1000,pointsize=8,height=6,width=6)
+plot(roc_test,print.auc = T,print.thres = "best",
+     col = "#802a2a",lwd = 4,
+     auc.polygon.col="#33802a2a",auc.polygon=T,
+     max.auc.polygon=T,
+     main = "Test Cohort",
+     grid=c(0.1, 0.2), grid.col=c("green", "red"),
+     add = F)
+dev.off()
+
+##  保存为EPS文件
+setEPS()
+postscript("roc_test.eps",width = 8,height = 8)
+plot(roc_test,print.auc = T,print.thres = "best",
+     col = "#802a2a",lwd = 4,
+     auc.polygon.col="#33802a2a",auc.polygon=T,
+     max.auc.polygon=T,
+     main = "Test Cohort",
+     grid=c(0.1, 0.2), grid.col=c("green", "red"),
+     add = F)
+dev.off()
+## 生成重点指标表格
+noi_train = coords(roc_train, "best", ret=c("threshold", "specificity", "sensitivity","tpr","npv"),
+                   transpose = F,best.method = "c")
+noi_test = coords(roc_test, "best", ret=c("threshold", "specificity", "sensitivity","tpr","npv"),
+                  transpose = F,
+                  best.method = "c")
+noi = rbind(noi_train,noi_test)
+## 计算阳性似然比和阴性似然比
+noi$plr = noi$sensitivity/(1-noi$specificity)
+noi$nlr = (1-noi$sensitivity)/noi$specificity
+noi = round(noi,2)
+rownames(noi) = c("Training Cohort","Validation Cohort")
+
+
+save.image("modeling.RData")
+
