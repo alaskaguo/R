@@ -1,0 +1,104 @@
+rm(list=ls())
+##  分析ag与其他所有变量的交互作用，并对所有变量进行亚组分析。
+##  rawdata:原始数据，无空值
+##  to_discrete：变量列表及截断值
+
+## 载入包
+{
+library(stringr)
+library(survival)
+}
+
+
+path = "d:/myresearch/micu/data"
+setwd(path)
+{
+dataset = read.csv("rawdata_cleaned.csv",row.names = 1)
+dataset = dataset[!colnames(dataset)%in%c("aniongap_max","ag_group_min","apsiii","gcs")]
+str(dataset)
+
+
+outcomename = c("los_hospital", "hospital_expire_flag","los_icu","survive_days","survive_30days","survive_90days","survive_180days","survive_365days",
+                "aki_stage_7day","aki_7day","aki_stage_48hr","aki_48hr","not_survive","status","urineoutput","weight_first")
+dataset$status= as.numeric(dataset$survive_30days)
+
+vars = colnames(dataset)
+
+covar = vars[!vars%in%outcomename]
+
+dataset$gender = ifelse(dataset$gender%>%as.character() == "F",0,1)
+
+cutoff = readxl::read_excel("to_discrete.xlsx")
+
+cutoff[is.na(cutoff$cutvalue),"cutvalue"]=0
+}
+
+#dataset$ag_group_min = dataset$ag_group_min%>%as.numeric()
+#x=4
+
+#dataset$ag_group_min = dataset$ag_group_min%>%as.factor()
+
+table3 = data.frame()
+
+
+for (x in 1 : length(covar)){
+
+print(covar[x])
+sub_var = covar[x]
+
+if (sub_var != "aniongap_min"){
+othervar = covar[!covar%in%c(sub_var)]
+multi_formula_inter = as.formula(paste('Surv(survive_days,status)~',str_c(covar,collapse = "+"),'+aniongap_min*',sub_var))
+multi_formula_inter
+multi_formula_sub = as.formula(paste('Surv(survive_days,status)~',str_c(othervar,collapse = "+")))
+multi_formula_sub
+
+dataset_n = dataset[dataset[sub_var] <= (cutoff[cutoff$item == sub_var,"cutvalue"][[1]]),]
+dataset_y = dataset[dataset[sub_var] >  (cutoff[cutoff$item == sub_var,"cutvalue"][[1]]),]
+
+multi_cox_n  = coxph(multi_formula_sub,data=dataset_n)
+multi_cox_y  = coxph(multi_formula_sub,data=dataset_y)
+multi_cox_inte = coxph(multi_formula_inter,data=dataset)
+
+p_interaction = round(summary(multi_cox_inte)$coefficients[length(covar)+1,5],3)
+
+hr       = round(exp(coef(multi_cox_n))['aniongap_min'][[1]],2)  ## HR
+ci_lower = round(exp(confint(multi_cox_n))["aniongap_min",1],2)    ## lower ci
+ci_upper = round(exp(confint(multi_cox_n))["aniongap_min",2],2)     ## upper ci
+pvalue   = round(summary(multi_cox_n)$coefficients["aniongap_min","Pr(>|z|)"],3)       ## p value
+
+out_n = data.frame(sub_var,
+                   paste("<=",(cutoff[cutoff$item == sub_var,"cutvalue"][[1]])),
+                   length(dataset_n[,1]),
+                   paste(hr,"(",ci_lower,"-",ci_upper,")"),
+                   pvalue,p_interaction)
+
+colnames(out_n) = c("items","ifnot","size","HR(CI95%)","p value","p interaction")
+table3 = rbind(table3,out_n)
+
+paste("<=",(cutoff[cutoff$item == sub_var,"cutvalue"][[1]]))
+
+hr = round(exp(coef(multi_cox_y))['aniongap_min'][[1]],2)  ## HR
+ci_lower = round(exp(confint(multi_cox_y))["aniongap_min",1],2)    ## lower ci
+ci_upper = round(exp(confint(multi_cox_y))["aniongap_min",2],2)     ## upper ci
+pvalue = summary(multi_cox_y)$coefficients["aniongap_min","Pr(>|z|)"]        ## p value
+
+out_y = data.frame(sub_var,
+                   paste(">",(cutoff[cutoff$item == sub_var,"cutvalue"][[1]])),
+                   length(dataset_y[,1]),
+                   paste(hr,"(",ci_lower,"-",ci_upper,")"),
+                   pvalue,p_interaction)
+
+colnames(out_y) = c("items","ifnot","size","HR(CI95%)","p value","p interaction")
+table3 = rbind(table3,out_y)
+}
+}
+
+for (i in 1:length(table3[,1])){
+  if (i%%2 == 0){
+    table3[i,c("items","p interaction")] = ''
+  }
+}
+
+write.csv(table3,"subgroupanalysis.csv")
+write.csv(cutoff,"cutoff.csv")
