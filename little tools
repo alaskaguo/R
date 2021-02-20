@@ -1,0 +1,192 @@
+PSM匹配
+match_ratio = 3
+{
+library(MatchIt)
+label = "lat_sec"    ##设置因变量
+var_match = names(dataset)[!names(dataset)%in%label]
+
+match_formula = as.formula(paste(label,"~",str_c(var_match,collapse = "+")))
+
+match_it <- matchit(match_formula, data = dataset, method="nearest", ratio=match_ratio)
+
+df_match <- match.data(match_it)[1:ncol(dataset)]
+
+dataset = df_match
+}
+
+## 提取单一值小于n的列名,转为因子
+
+{## 计算各列单一值个数
+unique_counts = data.frame(apply(dataset,2,function(x){
+  length(unique(x))
+}))
+colnames(unique_counts) = c("counts")
+## 提取单一值小于n的列名,转为因子
+n=5
+to_var = rownames(filter(unique_counts,counts<n))
+dataset[to_var] = apply(dataset[to_var],2,function(x)as.factor(x))
+#str(dataset)
+}
+
+##  对连续变量进行正太分布检验  适用于5000以下样本量
+contiouns_vars = select_if(dataset,is.numeric)
+plist = as.data.frame(apply(contiouns_vars, 2, function(x)shapiro.test(x)$p.value))
+## 更改P值表列名
+colnames(plist) = "pvalue"## 提取非正太分布数据行名
+nonnormal_vars = rownames(subset(plist,pvalue < 0.05))
+
+##分为训练集和验证集
+set.seed(121)               #random number generator
+{
+ind <- sample(2, nrow(dataset), replace = TRUE, prob = c(0.7, 0.3))
+trainset <- dataset[ind==1, ]    #the training data set
+testset <- dataset[ind==2, ]     #the test data set
+dataset$group = ind
+}
+
+{
+## 生成表1对象， 不分组
+tableOne <- CreateTableOne(vars = vars , data = dataset)
+## 打印表1
+tableone = as.data.frame(print(tableOne,
+                               explain = F,
+                               showAllLevels = FALSE,
+                               nonnormal = nonnormal_vars,
+                               printToggle = F,
+                               dropEqual = T,
+                               varLabels = T))
+#write.csv(tableone,"table_1.csv")
+## creat table1 by group
+
+## 生成表1对象，按重点变量标准分组
+tableone_1 = CreateTableOne(vars = vars, strata = var_group, data = dataset
+                            ,addOverall = TRUE
+)   
+
+
+tableone_11 = as.data.frame(print(tableone_1,
+                                  explain = F,
+                                  showAllLevels = FALSE,
+                                  nonnormal = nonnormal_vars,
+                                  printToggle = F,
+                                  dropEqual = T,
+                                  varLabels = T)
+)
+
+
+tableone_12 = as.data.frame(print(tableone_1,
+                                  explain = F,
+                                  showAllLevels = FALSE,
+                                  #nonnormal = nonnormal_vars,
+                                  printToggle = F,
+                                  dropEqual = T,
+                                  varLabels = T)
+)
+}
+
+write.csv(tableone_11,"table_IQR.csv")
+write.csv(tableone_12,"table_MSD.csv")
+
+
+##  单因素logistic 回归
+label = "lat_sec"    ##设置因变量
+{
+trainset$lat_sec = as.numeric(trainset[,label])          ## 因变量必须是数字格式
+testset$lat_sec = as.numeric(testset[,label])     
+vars = colnames(trainset)
+vars = vars[!vars%in%label]
+univ_foumulas = sapply(vars, function(x)as.formula(paste(label,"~",x)))
+#univ_foumulas
+univ_models = lapply(univ_foumulas,function(x){glm(x,
+                                                   family = binomial(link = "logit"),
+                                                   data = trainset)})
+
+univ_results = lapply(univ_models,
+                      function(x){
+                        x1 = summary(x)
+                        CI = exp(confint(x)) ##提取置信区间
+                        OR = exp(coef(x))   ##提取OR值
+                        ORCI = paste0(round(OR[[2]],2),"(",round(CI[2,1],2),"~",round(CI[2,2],2),")")  ##生成表格内容
+                        P = abs(round(x1$coefficients[,"Pr(>|z|)"][[2]],3))   ##提取P值
+                        B = round(x1$coefficients[,"Estimate"][[2]],3)
+                        res = c(B,ORCI,P)
+                        names(res) = c("B","OR(95%CI)","P value")
+                        return(res)
+                      })
+
+res = t(as.data.frame(univ_results,check.names = F))
+table_2 = as.data.frame(res)
+}
+write.csv(table_2,file = "table_2.csv",fileEncoding = "utf-8")
+
+## 后退法多因素logistic 回归
+p_cutoff = 0.2
+{
+table_2$`P value` =  as.numeric(as.character(table_2$`P value`))
+## 设置排除变量
+var_exclude = c('lym','neut','tia','group','wbc','plt','creatinine','urea','egfr')
+#names(dataset)
+multi_vars = rownames(table_2[table_2$`P value` < p_cutoff,])[!rownames(table_2[table_2$`P value` < p_cutoff,])%in%var_exclude]
+
+multi_formulas = as.formula(paste(label,"~",str_c(multi_vars,collapse = "+")))
+#multi_formulas
+multi_model = glm(multi_formulas,
+                  family = binomial(link = "logit"),
+                  data = trainset)
+#multi_model
+#summary(multi_model)
+## 后退法
+multi_model_2<-step(object = multi_model,trace = 0)
+#summary(multi_model_2)
+#multi_model_2
+}
+
+## 整理多因素分析结果
+{
+table_3 = as.data.frame(ShowRegTable(multi_model_2))
+## 修整表3
+table_3$item = rownames(table_3)
+table_3$p = as.character(table_3$p)
+table_3[table_3$p == "<0.001",]$p = 0.001
+table_3$p = as.numeric(table_3$p)
+table_3$item = str_replace(table_3$item,"1","")
+}
+write.csv(table_3,"table_3.csv")
+
+{
+library(rms)
+## 第三步 按照nomogram要求“打包”数据，绘制nomogram的关键步骤,??datadist查看详细说明
+dd=datadist(trainset)
+options(datadist="dd") 
+##提取纳入的变量名
+var = table_3[(table_3$p<0.05) & (table_3$item != "(Intercept)"),]$item
+#var = var[3:6]
+norm_vars = paste(var,collapse = "+")
+norm_formula = paste(label,"~",norm_vars)
+norm_formula
+## 第四步 构建模型
+## 构建logisitc回归模型
+f1 <- lrm(as.formula(norm_formula), data = trainset,x = T,y = T) 
+
+## 绘制logisitc回归的风险预测值的nomogram图
+nom <- nomogram(f1, fun= function(x)1/(1+exp(-x)), # or fun=plogis
+                lp=F, funlabel="Risk")
+plot(nom)    ## 生成列线图 手动保存
+}
+
+## 提取列线图公式
+library(nomogramEx)
+nom_ex = nomogramEx(nomo = nom,np=1,digit=9)   ##  np为结局个数,logistic 为一个结局
+
+## 根据计算得分
+{
+library(nomogramFormula)
+options(oldoption)
+#results <- formula_lp(nomogram = nom,power = 1)
+results <- formula_rd(nomogram = nom)
+## 计算得分需要把所有数据转为数字类型
+trainset$points <- points_cal(formula = results$formula,rd=
+                                as.data.frame(apply(trainset,2,function(x)as.numeric(x))))
+testset$points <- points_cal(formula = results$formula,rd=
+                                as.data.frame(apply(testset,2,function(x)as.numeric(x))))
+}
