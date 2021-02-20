@@ -170,7 +170,7 @@ f1 <- lrm(as.formula(norm_formula), data = trainset,x = T,y = T)
 
 ## 绘制logisitc回归的风险预测值的nomogram图
 nom <- nomogram(f1, fun= function(x)1/(1+exp(-x)), # or fun=plogis
-                lp=F, funlabel="Risk")
+                lp=F, funlabel="Risk")             
 plot(nom)    ## 生成列线图 手动保存
 }
 
@@ -189,4 +189,119 @@ trainset$points <- points_cal(formula = results$formula,rd=
                                 as.data.frame(apply(trainset,2,function(x)as.numeric(x))))
 testset$points <- points_cal(formula = results$formula,rd=
                                 as.data.frame(apply(testset,2,function(x)as.numeric(x))))
+}
+
+## 生成重点指标表格
+{
+noi_train = coords(roc_trainset, "best", ret="all",
+                   transpose = F,best.method = "y")
+rownames(noi_train) = c("trainset") 
+noi_test = coords(roc_testset, "best", ret="all",
+                  transpose = F,best.method = "y")
+rownames(noi_test) = c("testset")
+noi_total = rbind(noi_train,noi_test)
+
+
+noi_test_ci = ci.coords(roc_testset, "best", ret="all",
+                  transpose = F,best.method = "y")
+
+noi_train_ci = ci.coords(roc_trainset, "best", ret="all",
+                         transpose = F,best.method = "y")
+}
+
+
+noi_table_train = data.frame()
+for (i in 1:length(noi_total)){
+  
+temp = data.frame("item" = names(noi_train_ci[i]),
+           number = noi_train[1,names(noi_train_ci[i])],
+           "lowerci" = noi_train_ci[i][[1]][1],
+           "upperci" = noi_train_ci[i][[1]][3])
+noi_table_train = rbind(noi_table_train,temp)
+}
+
+noi_table_test = data.frame()
+for (i in 1:length(noi_total)){
+  
+  temp = data.frame("item" = names(noi_test_ci[i]),
+                    number = noi_test[1,names(noi_test_ci[i])],
+                    "lowerci" = noi_test_ci[i][[1]][1],
+                    "upperci" = noi_test_ci[i][[1]][3])
+  
+  noi_table_test = rbind(noi_table_test,temp)
+}
+
+noi_table = cbind(noi_table_train,noi_table_test)
+write.csv(noi_table,"table_4.csv")
+
+## 绘制校正曲线
+{
+## 构建校准曲线对象，对象为多因素分析模型
+cal_trainset<- calibrate(f1,method='boot', B=1000)     # 构建校准曲线对象
+plot(cal_trainset,xlim=c(0,1.0),ylim=c(0,1.0)) 
+## 生成验证集校正曲线模型对象，公式为testset实际事件和预测结果，注意顺序
+f2 = lrm(lat_sec~prob,data = testset,x = T,y = T)
+cal_test = calibrate(f2,method = "boot",B = 1000,data = testset)
+plot(cal_test,xlim=c(0,1.0),ylim=c(0,1.0)) 
+
+}
+
+## 绘制Decision Curve
+{
+
+  library(rmda)
+  dcv_trainset =  decision_curve(as.formula(norm_formula)
+                                 ,data = trainset,
+                                 family = binomial(link ='logit'), thresholds = seq(0,1, by = 0.01),
+                                 confidence.intervals= 0.95,study.design = 'case-control',
+                                 population.prevalence= 0.3
+  )
+  
+  plot_decision_curve(dcv_trainset,         ## 可以是曲线对象的List,两条线画一个图上
+                      curve.names="Normogram",
+                      cost.benefit.axis =FALSE,
+                      col = c('red','blue'),
+                      confidence.intervals = F,
+                      standardize = F)
+  
+  dcv_testset =  decision_curve(as.formula(norm_formula)
+                                ,data = testset,
+                                family = binomial(link ='logit'), thresholds = seq(0,1, by = 0.01),
+                                confidence.intervals= 0.95,study.design = 'case-control',
+                                population.prevalence= 0.3
+  )
+  
+  plot_decision_curve(dcv_testset,         ## 可以是曲线对象的List,两条线画一个图上
+                      curve.names="Normogram",
+                      cost.benefit.axis =FALSE,
+                      col = c('red','blue'),
+                      confidence.intervals = F,
+                      standardize = F)
+  
+}
+
+
+##  拟合优度检验
+library(ResourceSelection)
+fit4 <- glm(norm_formula,data = trainset,family = "binomial")
+h1 = hoslem.test(fit4$y,fitted(fit4),g=10)
+h1
+fit5 <- glm(norm_formula,data = testset,family = "binomial")
+h2 = hoslem.test(fit5$y,fitted(fit5),g=10)
+h2
+
+##  应用模型预测事件概率
+{
+fit4 <- glm(norm_formula,data = trainset,family = "binomial")
+
+## 预测阳性概率
+trainset$prob = predict(fit4,trainset,
+                        type = "response",
+                        legacy.axes = T,percent = T
+)  
+
+testset$prob = predict(fit4,testset,
+                       type = "response",
+                       legacy.axes = T,percent = T
+)  
 }
